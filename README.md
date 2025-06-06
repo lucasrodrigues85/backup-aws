@@ -1,6 +1,16 @@
 # 🔄 Sistema de Backup Automatizado para AWS S3
 
-Um sistema robusto e completo para backup automatizado de arquivos e diretórios para AWS S3, with notificações via Telegram e validação de integridade avançada.
+[![GitHub release](https://img.shields.io/github/release/lucasrodrigues85/backup-aws.svg)](https://github.com/lucasrodrigues85/backup-aws/releases)
+[![GitHub license](https://img.shields.io/github/license/lucasrodrigues85/backup-aws.svg)](https://github.com/lucasrodrigues85/backup-aws/blob/main/LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/lucasrodrigues85/backup-aws.svg)](https://github.com/lucasrodrigues85/backup-aws/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/lucasrodrigues85/backup-aws.svg)](https://github.com/lucasrodrigues85/backup-aws/network)
+[![GitHub issues](https://img.shields.io/github/issues/lucasrodrigues85/backup-aws.svg)](https://github.com/lucasrodrigues85/backup-aws/issues)
+[![Python](https://img.shields.io/badge/Python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![Bash](https://img.shields.io/badge/Bash-4.0+-green.svg)](https://www.gnu.org/software/bash/)
+[![AWS S3](https://img.shields.io/badge/AWS-S3-orange.svg)](https://aws.amazon.com/s3/)
+[![Telegram](https://img.shields.io/badge/Telegram-Bot-blue.svg)](https://core.telegram.org/bots)
+
+Um sistema robusto e completo para backup automatizado de arquivos e diretórios para AWS S3, com notificações via Telegram e validação de integridade avançada.
 
 ## ✨ Características
 
@@ -41,8 +51,8 @@ O sistema é composto por quatro componentes principais:
 
 ### 1. Clone o repositório
 ```bash
-git clone https://github.com/seu-usuario/sistema-backup-automatizado.git
-cd sistema-backup-automatizado
+git clone https://github.com/lucasrodrigues85/backup-aws.git
+cd backup-aws
 ```
 
 ### 2. Configure o rclone para AWS S3
@@ -312,8 +322,8 @@ Se este projeto foi útil para você, considere me pagar um café! ☕
 
 Sua contribuição ajuda a manter o projeto ativo e desenvolver novas funcionalidades.
 
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-yellow.svg?style=flat-square&logo=buy-me-a-coffee)](https://www.buymeacoffee.com/seuusuario)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-yellow.svg?style=flat-square&logo=buy-me-a-coffee)](https://www.coff.ee/lucasmrodr0)
 
-**PIX:** `seu@email.com.br`
+**PIX:** `5ba71767-62af-4116-8cd4-119fcfe35e54` (chave aleatória)
 
 Muito obrigado pelo seu apoio! 🚀
