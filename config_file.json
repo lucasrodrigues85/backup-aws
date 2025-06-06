@@ -1,0 +1,50 @@
+{
+  "telegram": {
+    "token": "SEU_TOKEN_DO_TELEGRAM_AQUI",
+    "chat_id": "SEU_CHAT_ID_AQUI"
+  },
+  "s3": {
+    "bucket": "SEU_BUCKET_S3_AQUI",
+    "storage_class": "DEEP_ARCHIVE"
+  },
+  "backup": {
+    "script_path": "/mnt/storage/config/rotina-backup/backup.sh",
+    "temp_dir": "/tmp",
+    "max_size_gb": 1024
+  },
+  "folders": [
+    {
+      "name": "config",
+      "path": "/mnt/storage/config",
+      "split_depth": 1,
+      "enabled": true
+    },
+    {
+      "name": "databases", 
+      "path": "/mnt/storage/databases",
+      "split_depth": 1,
+      "enabled": true
+    },
+    {
+      "name": "user1",
+      "path": "/mnt/storage/user1", 
+      "split_depth": 2,
+      "enabled": true
+    },
+    {
+      "name": "user2",
+      "path": "/mnt/storage/user2",
+      "split_depth": 2,
+      "enabled": true
+    }
+  ],
+  "logging": {
+    "level": "INFO",
+    "keep_logs_days": 30
+  },
+  "validation": {
+    "enabled": true,
+    "keep_local_copy": false,
+    "deep_validation": true
+  }
+}
