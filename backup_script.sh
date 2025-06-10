@@ -175,17 +175,18 @@ generate_file_list() {
       echo "Total size: $(find . -maxdepth 1 -type f -exec du -b {} \; | awk '{sum+=$1} END {print sum " bytes (" sum/1024/1024/1024 " GB)"}' || echo "0 bytes")"
     else
       echo "Files: $(find . -type f | wc -l)"
-      echo "Directories: $(find . -type d | wc -l)"
+      echo "Directories: $(find . -type d | wc -l)"  
       echo "Total size: $(du -sb . | cut -f1) bytes ($(du -sh . | cut -f1))"
     fi
   } > "$list_file"
   
   msg "📄 File listing generated: $list_file"
   
-  # Upload file listing
+  # Upload file listing - CORREÇÃO AQUI
   if [[ "$dry_run" != true ]]; then
     local s3_list_path="${backup_name}/${name}.txt"
-    rclone copy "${rclone_args[@]}" "$list_file" "AmazonS3:$bucket/$(dirname "$s3_list_path")/" 
+    # Corrigido: usar o nome do arquivo diretamente, não o diretório
+    rclone copy "${rclone_args[@]}" "$list_file" "AmazonS3:$bucket/$backup_name/" --s3-chunk-size "${chunk_size_mb}M"
     msg "📤 File listing uploaded to S3: $s3_list_path"
   fi
 }
