@@ -2,8 +2,8 @@
 """
 Sistema de Backup Automatizado
 Autor: Lucas M. Rodrigues
-Versão: 2.0
-Data: 01/2025
+Versão: 2.1
+Data: 06/2025
 
 Executa backups automatizados com validação completa e notificações via Telegram.
 Configurações são carregadas de arquivo externo para maior segurança.
@@ -154,6 +154,76 @@ class BackupManager:
             self.logger.error(f"Erro ao instalar módulo {module_name}: {e}")
             raise
 
+    def show_backup_plan(self, folder_config):
+        """Mostra o plano de backup para uma pasta específica."""
+        name = folder_config['name']
+        path = folder_config['path']
+        split_depth = folder_config['split_depth']
+        
+        print(f"\n📁 {name}:")
+        print(f"   📂 Caminho: {path}")
+        print(f"   🎯 Split depth: {split_depth}")
+        print(f"   ☁️  Bucket S3: {self.config['s3']['bucket']}")
+        print(f"   🗄️  Storage class: {self.config['s3'].get('storage_class', 'DEEP_ARCHIVE')}")
+        
+        if not os.path.exists(path):
+            print(f"   ❌ ERRO: Caminho não encontrado!")
+            return
+        
+        if os.path.isfile(path):
+            print(f"   📄 Backup de arquivo único:")
+            print(f"      → S3: {name}/{os.path.basename(path)}")
+        elif split_depth == 0:
+            print(f"   📦 Backup como arquivo único:")
+            print(f"      → S3: {name}/{os.path.basename(path)}.tar.gz")
+        else:
+            print(f"   📁 Estrutura que será processada:")
+            self._show_directory_structure(path, split_depth, name, "", 1)
+
+    def _show_directory_structure(self, base_path, target_depth, backup_name, current_path, current_depth):
+        """Mostra recursivamente a estrutura de diretórios que será processada."""
+        full_path = os.path.join(base_path, current_path) if current_path else base_path
+        
+        try:
+            entries = os.listdir(full_path)
+            dirs = [e for e in entries if os.path.isdir(os.path.join(full_path, e))]
+            files = [e for e in entries if os.path.isfile(os.path.join(full_path, e))]
+            
+            # Filtrar diretórios do sistema
+            dirs = [d for d in dirs if d not in ['$RECYCLE.BIN', '.Trash-1000', 'System Volume Information']]
+            
+            indent = "      " + "  " * current_depth
+            
+            # Se estamos na profundidade alvo, mostrar o que será feito
+            if current_depth == target_depth:
+                # Arquivos no nível atual
+                if files:
+                    s3_path = f"{backup_name}/{current_path}/_files.tar.gz" if current_path else f"{backup_name}/_files.tar.gz"
+                    print(f"{indent}📄 Arquivos ({len(files)} arquivos) → {s3_path}")
+                
+                # Cada diretório como arquivo separado
+                for dir_name in sorted(dirs):
+                    dir_path = os.path.join(current_path, dir_name) if current_path else dir_name
+                    s3_path = f"{backup_name}/{dir_path}.tar.gz"
+                    
+                    # Contar arquivos no diretório
+                    dir_full_path = os.path.join(full_path, dir_name)
+                    try:
+                        file_count = sum(len(files) for _, _, files in os.walk(dir_full_path))
+                        print(f"{indent}📁 {dir_name}/ ({file_count} arquivos) → {s3_path}")
+                    except (OSError, PermissionError):
+                        print(f"{indent}📁 {dir_name}/ (erro ao contar) → {s3_path}")
+            
+            # Se ainda não chegamos na profundidade alvo, continuar descendo
+            elif current_depth < target_depth:
+                for dir_name in sorted(dirs):
+                    next_path = os.path.join(current_path, dir_name) if current_path else dir_name
+                    print(f"{indent}📁 {dir_name}/")
+                    self._show_directory_structure(base_path, target_depth, backup_name, next_path, current_depth + 1)
+                    
+        except (OSError, PermissionError) as e:
+            print(f"{indent}❌ Erro ao acessar diretório: {e}")
+
     def calculate_directory_hash(self, path):
         """Calcula hash MD5 de todos os arquivos em uma pasta."""
         hash_md5 = hashlib.md5()
@@ -299,7 +369,7 @@ class BackupManager:
         except Exception as e:
             self.logger.error(f"Erro ao enviar mensagem Telegram: {e}")
 
-    async def executar_backup(self, folder_config):
+    async def executar_backup(self, folder_config, dry_run=False):
         """Executa o script de backup com validação completa."""
         name = folder_config['name']
         path = folder_config['path']
@@ -315,6 +385,11 @@ class BackupManager:
             # Verifica se o caminho existe
             if not os.path.exists(path):
                 raise FileNotFoundError(f"Caminho não encontrado: {path}")
+            
+            # Se for dry-run, não executa o backup real
+            if dry_run:
+                self.logger.info(f"🔍 DRY RUN: Backup seria executado para {name}")
+                return True
             
             # Gera lista de arquivos antes do backup
             if not self.gerar_lista_arquivos(path, txt_path):
@@ -377,27 +452,56 @@ class BackupManager:
         except subprocess.TimeoutExpired:
             mensagem_erro = f"❌ Timeout no backup para <b>{name}</b> (>1h)"
             self.logger.error(mensagem_erro)
-            await self.enviar_mensagem(mensagem_erro)
+            if not dry_run:
+                await self.enviar_mensagem(mensagem_erro)
             return False
             
         except subprocess.CalledProcessError as e:
             mensagem_erro = f"❌ Erro ao executar backup para <b>{name}</b>: {e}"
             self.logger.error(f"Stdout: {e.stdout}")
             self.logger.error(f"Stderr: {e.stderr}")
-            await self.enviar_mensagem(mensagem_erro)
+            if not dry_run:
+                await self.enviar_mensagem(mensagem_erro)
             return False
             
         except Exception as e:
             mensagem_erro = f"❌ Erro inesperado no backup para <b>{name}</b>: {e}"
             self.logger.error(mensagem_erro)
-            await self.enviar_mensagem(mensagem_erro)
+            if not dry_run:
+                await self.enviar_mensagem(mensagem_erro)
             return False
 
-    async def executar_todos_backups(self):
+    async def executar_todos_backups(self, dry_run=False):
         """Executa todos os backups configurados."""
         inicio = datetime.now()
-        self.logger.info("🚀 Iniciando processo de backup automatizado")
         
+        if dry_run:
+            self.logger.info("🔍 Modo DRY RUN ativado - mostrando plano de backup")
+            print("\n" + "="*60)
+            print("🔍 DRY RUN MODE - Plano de Backup")
+            print("="*60)
+            
+            folders_habilitadas = [f for f in self.config['folders'] if f.get('enabled', True)]
+            
+            print(f"\n📊 Resumo:")
+            print(f"   📂 Total de pastas configuradas: {len(self.config['folders'])}")
+            print(f"   ✅ Pastas habilitadas: {len(folders_habilitadas)}")
+            print(f"   ☁️  Bucket S3: {self.config['s3']['bucket']}")
+            print(f"   🗄️  Storage class: {self.config['s3'].get('storage_class', 'DEEP_ARCHIVE')}")
+            
+            if not folders_habilitadas:
+                print("\n❌ Nenhuma pasta habilitada para backup!")
+                return False
+            
+            for folder_config in folders_habilitadas:
+                self.show_backup_plan(folder_config)
+            
+            print(f"\n" + "="*60)
+            print("💡 Execute sem --dry-run para realizar o backup real")
+            print("="*60)
+            return True
+        
+        self.logger.info("🚀 Iniciando processo de backup automatizado")
         await self.enviar_mensagem("🚀 <b>Iniciando backup automatizado</b>")
         
         folders_habilitadas = [f for f in self.config['folders'] if f.get('enabled', True)]
@@ -466,7 +570,7 @@ def main():
     parser.add_argument('--config', default='config.json', 
                        help='Arquivo de configuração (padrão: config.json)')
     parser.add_argument('--dry-run', action='store_true',
-                       help='Executa sem fazer backup real')
+                       help='Mostra o que seria feito sem executar backup real')
     parser.add_argument('--folder', 
                        help='Executa backup apenas para pasta específica')
     
@@ -475,24 +579,22 @@ def main():
     try:
         manager = BackupManager(args.config)
         
-        if args.dry_run:
-            manager.logger.info("🔍 Modo dry-run ativado")
-            print("Configuração carregada com sucesso!")
-            print(f"Pastas configuradas: {len(manager.config['folders'])}")
-            for folder in manager.config['folders']:
-                status = "✅" if folder.get('enabled', True) else "❌"
-                print(f"  {status} {folder['name']}: {folder['path']} (depth: {folder['split_depth']})")
-            return
-        
         # Filtra pasta específica se solicitado
         if args.folder:
+            original_folders = manager.config['folders']
             manager.config['folders'] = [
-                f for f in manager.config['folders'] 
+                f for f in original_folders 
                 if f['name'] == args.folder and f.get('enabled', True)
             ]
             if not manager.config['folders']:
                 print(f"❌ Pasta '{args.folder}' não encontrada ou desabilitada")
+                print(f"Pastas disponíveis: {[f['name'] for f in original_folders if f.get('enabled', True)]}")
                 return
+        
+        # Se for dry-run, não precisa configurar ambiente
+        if args.dry_run:
+            success = asyncio.run(manager.executar_todos_backups(dry_run=True))
+            sys.exit(0 if success else 1)
         
         # Executa setup e backup
         asyncio.run(manager.setup_environment())
