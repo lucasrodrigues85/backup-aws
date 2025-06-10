@@ -102,7 +102,7 @@ chmod +x cron_setup.sh
     "storage_class": "DEEP_ARCHIVE"
   },
   "backup": {
-    "script_path": "/caminho/para/backup.sh",
+    "script_path": "/caminho/para/backup_script.sh",
     "temp_dir": "/tmp",
     "max_size_gb": 1024
   },
@@ -238,7 +238,7 @@ O sistema oferece múltiplas camadas de validação:
 
 #### Erro de permissão
 ```bash
-chmod +x backup.sh backup_scheduler.py cron_setup.sh
+chmod +x backup_script.sh backup_scheduler.py cron_setup.sh
 ```
 
 #### Rclone não configurado
