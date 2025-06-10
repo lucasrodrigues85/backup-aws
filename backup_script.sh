@@ -149,7 +149,9 @@ generate_file_list() {
   local name=$2
   local files_only=${3-false}
   
-  local list_file="/tmp/${backup_name}_${name//\//_}_files.txt"
+  # Limpar o nome para criar um nome de arquivo válido
+  local clean_name=$(echo "${name}" | sed 's|/|_|g' | sed 's|_files$||' | sed 's|^\.|_|')
+  local list_file="/tmp/${backup_name}_${clean_name}_files.txt"
   
   cd "$path" || die "Can't access $path"
   
@@ -182,12 +184,15 @@ generate_file_list() {
   
   msg "📄 File listing generated: $list_file"
   
-  # Upload file listing - CORREÇÃO AQUI
+  # Upload file listing - CORREÇÃO FINAL
   if [[ "$dry_run" != true ]]; then
-    local s3_list_path="${backup_name}/${name}.txt"
-    # Corrigido: usar o nome do arquivo diretamente, não o diretório
-    rclone copy "${rclone_args[@]}" "$list_file" "AmazonS3:$bucket/$backup_name/" --s3-chunk-size "${chunk_size_mb}M"
-    msg "📤 File listing uploaded to S3: $s3_list_path"
+    # Usar rcat para fazer upload direto do conteúdo, evitando problemas de path
+    local s3_target="${backup_name}/${clean_name}_files.txt"
+    cat "$list_file" | rclone rcat "${rclone_args[@]}" "AmazonS3:$bucket/$s3_target"
+    msg "📤 File listing uploaded to S3: $s3_target"
+    
+    # Limpar arquivo temporário
+    rm -f "$list_file"
   fi
 }
 
@@ -315,9 +320,9 @@ backup_path() {
             fi
           fi
           
-          # Upload from local file
+          # CORREÇÃO: Upload do arquivo local usando rclone rcat
           msg "⬆️ Uploading validated archive $archive_name"
-          rclone copy "${args[@]}" "$local_archive" "AmazonS3:$bucket/$(dirname "$archive_name")/"
+          cat "$local_archive" | rclone rcat "${args[@]}" "AmazonS3:$bucket/$archive_name"
           
           # Clean up local file unless keep_local is true
           if [[ "$keep_local" != true ]]; then
