@@ -6,8 +6,8 @@
 set -e
 
 # Configurações
-SCRIPT_DIR="/mnt/storage/config/rotina-backup"
-PYTHON_SCRIPT="$SCRIPT_DIR/agendamento.py"
+SCRIPT_DIR="/path/to/backup-aws"
+PYTHON_SCRIPT="$SCRIPT_DIR/backup_scheduler.py"
 LOG_DIR="$SCRIPT_DIR/logs"
 CRON_LOG="$LOG_DIR/cron.log"
 
