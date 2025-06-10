@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Sistema de Backup Automatizado
-Autor: [Seu Nome]
+Autor: Lucas M. Rodrigues
 Versão: 2.0
-Data: 2025
+Data: 01/2025
 
 Executa backups automatizados com validação completa e notificações via Telegram.
 Configurações são carregadas de arquivo externo para maior segurança.
