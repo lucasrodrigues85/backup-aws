@@ -53,6 +53,66 @@ EOF
   exit
 }
 
+# Função para mostrar o plano de backup durante dry-run
+show_backup_plan() {
+  local current_path=$1
+  local depth=$2
+  local indent=""
+  
+  for ((i=1; i<depth; i++)); do
+    indent="  $indent"
+  done
+  
+  local full_path="$root_path/$current_path"
+  [[ "$current_path" == "." ]] && full_path="$root_path"
+  
+  cd "$full_path" || return
+  
+  # Listar diretórios
+  local dirs=()
+  while IFS= read -r -d $'\0'; do
+    dirs+=("$REPLY")
+  done < <(find . -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null || true)
+  
+  # Listar arquivos no nível atual
+  local files_count
+  files_count=$(find . -maxdepth 1 -type f 2>/dev/null | wc -l)
+  
+  if [[ $depth -eq $split_depth ]]; then
+    # Mostrar arquivos do nível atual
+    if [[ $files_count -gt 0 ]]; then
+      echo "${indent}📄 Arquivos ($files_count arquivos) → $backup_name/$current_path/_files.tar.gz"
+    fi
+    
+    # Mostrar cada diretório como arquivo separado
+    for dir in "${dirs[@]}"; do
+      if [[ "$dir" != *\$RECYCLE.BIN && "$dir" != *.Trash-1000 && "$dir" != *System\ Volume\ Information ]]; then
+        local dir_clean=$(echo "$dir" | sed 's|^\./||')
+        local dir_files
+        dir_files=$(find "$dir" -type f 2>/dev/null | wc -l)
+        echo "${indent}📁 $dir_clean/ ($dir_files arquivos) → $backup_name/$current_path/$dir_clean.tar.gz"
+      fi
+    done
+  elif [[ $depth -lt $split_depth ]]; then
+    # Continuar descendo na estrutura
+    for dir in "${dirs[@]}"; do
+      if [[ "$dir" != *\$RECYCLE.BIN && "$dir" != *.Trash-1000 && "$dir" != *System\ Volume\ Information ]]; then
+        local dir_clean=$(echo "$dir" | sed 's|^\./||')
+        echo "${indent}📁 $dir_clean/"
+        
+        local next_path
+        if [[ "$current_path" == "." ]]; then
+          next_path="$dir_clean"
+        else
+          next_path="$current_path/$dir_clean"
+        fi
+        
+        show_backup_plan "$next_path" $((depth + 1))
+      fi
+    done
+  fi
+}
+
 main() {
   root_path=$(
     cd "$(dirname "$root_path")"
@@ -62,12 +122,51 @@ main() {
   # division by 10k gives integer (without fraction), round result up by adding 1
   chunk_size_mb=$((max_size_gb * 1024 / 10000 + 1))
 
-  # common rclone parameters
+  # common rclone parameters for TAR.GZ files (Deep Archive)
   rclone_args=(
     "-P"
+    "--progress"
+    "--stats=10s"
+    "--stats-one-line"
     "--s3-storage-class" "$storage_class"
     "--s3-upload-concurrency" 8
   )
+
+  # common rclone parameters for TXT/MD5 files (Standard)
+  rclone_standard_args=(
+   "--progress"
+    "--stats=10s"
+    "--stats-one-line"
+    "--s3-storage-class" "STANDARD"
+    "--s3-upload-concurrency" 8
+  )
+
+  # If dry-run, show what would be backed up
+  if [[ "$dry_run" == true ]]; then
+    msg "🔍 DRY RUN MODE - Showing what would be backed up:"
+    msg "📂 Root path: $root_path"
+    msg "🎯 Split depth: $split_depth"
+    msg "☁️  S3 bucket: $bucket"
+    msg "📦 Backup name: $backup_name"
+    msg "🗄️  Storage class: $storage_class"
+    echo ""
+    
+    if [[ -f "$root_path" ]]; then
+      msg "📄 Single file backup:"
+      msg "   File: $root_path"
+      msg "   → S3: $backup_name/$(basename "$root_path")"
+    elif [[ "$split_depth" -eq 0 ]]; then
+      msg "📦 Single archive backup:"
+      msg "   Path: $root_path"
+      msg "   → S3: $backup_name/$(basename "$root_path").tar.gz"
+    else
+      msg "📁 Directory structure that will be backed up:"
+      show_backup_plan . 1
+    fi
+    echo ""
+    msg "💡 Remove --dry-run to execute the actual backup"
+    return
+  fi
 
   if [[ -f "$root_path" ]]; then
     backup_file "$root_path" "$(basename "$root_path")"
@@ -81,7 +180,7 @@ main() {
 }
 
 parse_params() {
-  split_depth=1  # Mudança: padrão agora é 1 (mais útil)
+  split_depth=1  
   max_size_gb=1024
   storage_class="DEEP_ARCHIVE"
   dry_run=false
@@ -133,7 +232,11 @@ parse_params() {
 }
 
 msg() {
-  echo >&2 -e "$(date +"%Y-%m-%d %H:%M:%S") ${1-}"
+  local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+  local message="${1-}"
+  echo >&2 -e "[$timestamp] $message"
+  # Força flush do buffer para exibição imediata
+  exec 2>&2
 }
 
 die() {
@@ -166,32 +269,31 @@ generate_file_list() {
     if [[ "$files_only" == true ]]; then
       find . -maxdepth 1 -type f -exec ls -la {} \; | sort
     else
-      find . -type f -exec ls -la {} \; | sort
+      # MUDANÇA: Para diretórios completos, vamos listar apenas arquivos do nível atual
+      # para manter consistência com o cálculo de hash
+      find . -maxdepth 1 -type f -exec ls -la {} \; | sort
     fi
     
     echo ""
     echo "----------------------------------------"
     echo "Summary:"
-    if [[ "$files_only" == true ]]; then
-      echo "Files: $(find . -maxdepth 1 -type f | wc -l)"
-      echo "Total size: $(find . -maxdepth 1 -type f -exec du -b {} \; | awk '{sum+=$1} END {print sum " bytes (" sum/1024/1024/1024 " GB)"}' || echo "0 bytes")"
-    else
-      echo "Files: $(find . -type f | wc -l)"
-      echo "Directories: $(find . -type d | wc -l)"  
-      echo "Total size: $(du -sb . | cut -f1) bytes ($(du -sh . | cut -f1))"
-    fi
+    echo "Files: $(find . -maxdepth 1 -type f | wc -l)"
+    echo "Total size: $(find . -maxdepth 1 -type f -exec du -b {} \; | awk '{sum+=$1} END {print sum " bytes (" sum/1024/1024/1024 " GB)"}' || echo "0 bytes")"
   } > "$list_file"
   
   msg "📄 File listing generated: $list_file"
   
-  # Upload file listing - CORREÇÃO FINAL
+  # Upload file listing
   if [[ "$dry_run" != true ]]; then
-    # Usar rcat para fazer upload direto do conteúdo, evitando problemas de path
     local s3_target="${backup_name}/${clean_name}_files.txt"
-    cat "$list_file" | rclone rcat "${rclone_args[@]}" "AmazonS3:$bucket/$s3_target"
+    # Upload file listing with STANDARD storage class
+    rclone_standard_args=(
+      "-P"
+      "--s3-storage-class" "STANDARD"
+      "--s3-upload-concurrency" 8
+    )
+    cat "$list_file" | rclone rcat "${rclone_standard_args[@]}" "AmazonS3:$bucket/$s3_target"
     msg "📤 File listing uploaded to S3: $s3_target"
-    
-    # Limpar arquivo temporário
     rm -f "$list_file"
   fi
 }
@@ -233,7 +335,8 @@ backup_file() {
   local path=$1
   local name=$2
 
-  msg "⬆️ Uploading file $name"
+  msg "⬆️ Uploading archive $archive_name to S3 (Storage: $storage_class)"
+  msg "🔄 Upload progress will be shown by rclone..."
 
   args=("${rclone_args[@]}" "--checksum")
   [[ "$dry_run" = true ]] && args+=("--dry-run")
@@ -259,13 +362,10 @@ backup_path() {
 
     cd "$path" || die "Can't access $path"
 
-    if [[ "$files_only" == true ]]; then
-      msg "🔍 Listing files in \"$path\"..."
-      files=$(find . -maxdepth 1 -type f | sed 's/^\.\///g')
-    else
-      msg "🔍 Listing all files under \"$path\"..."
-      files=$(find . -type f | sed 's/^\.\///g')
-    fi
+    # MUDANÇA PRINCIPAL: Sempre usar apenas arquivos do nível atual para o hash
+    # Isso garante que o hash seja por pasta, não recursivo
+    msg "🔍 Listing files in \"$path\" (current level only)..."
+    files=$(find . -maxdepth 1 -type f | sed 's/^\.\///g')
 
     # sort to maintain always the same order for hash
     files=$(echo "$files" | LC_ALL=C sort)
@@ -276,28 +376,38 @@ backup_path() {
     fi
 
     files_count=$(echo "$files" | wc -l | awk '{ print $1 }')
-    msg "ℹ️ Found $files_count files"
+    msg "ℹ️ Found $files_count files (current level only)"
+    msg "📋 Files to backup: $(echo "$files" | head -5 | tr '\n' ' ')$([ $files_count -gt 5 ] && echo "... and $((files_count-5)) more")"
     
     # Generate detailed file listing
     generate_file_list "$path" "$name" "$files_only"
     
+    msg "#️⃣ Calculating hash for files in current level of \"$path\"..."
+
+    # Calcular hash apenas dos arquivos do nível atual (não recursivo)
     if [[ "$files_only" == true ]]; then
-        msg "#️⃣ Calculating hash for files in path \"$path\"..."
+        # Para files_only, usar apenas os arquivos do nível atual
+        hash=$(echo "$files" | tr '\n' '\0' | parallel -0 -k -m md5sum -- | md5sum | awk '{ print $1 }')
     else
-        msg "#️⃣ Calculating hash for directory \"$path\"..."
+        # Para diretório completo, calcular hash apenas dos arquivos do nível atual
+        # mas incluir todo o conteúdo no tar
+        current_level_files=$(find . -maxdepth 1 -type f | sed 's/^\.\///g' | LC_ALL=C sort)
+        if [[ -n "$current_level_files" ]]; then
+            hash=$(echo "$current_level_files" | tr '\n' '\0' | parallel -0 -k -m md5sum -- | md5sum | awk '{ print $1 }')
+        else
+            hash="empty_directory"
+        fi
     fi
 
-    # replace newlines with zero byte to distinct between whitespaces in names and next files
-    # "md5sum --" to signal start of file names in case file name starts with "-"
-    hash=$(echo "$files" | tr '\n' '\0' | parallel -0 -k -m md5sum -- | md5sum | awk '{ print $1 }')
-    msg "ℹ️ Content hash: $hash"
+    # MUDANÇA: Agora o hash se baseia apenas nos arquivos do nível atual
+    msg "ℹ️ Content hash (current level): $hash"
 
     s3_hash=$(rclone cat "AmazonS3:$bucket/$archive_name.md5" 2>/dev/null || echo "")
 
     if [[ "$hash" == "$s3_hash" ]] && [[ $(rclone lsf "AmazonS3:$bucket/$archive_name" 2>/dev/null | wc -l) -eq 1 ]]; then
       msg "🟨 Archive $archive_name already exists with the same content hash - skipping"
     else
-      msg "📦 Creating archive $archive_name"
+      msg "📦 Creating archive $archive_name ($files_count files, estimated size: $(du -sh . 2>/dev/null | cut -f1 || echo "unknown"))"
 
       if [[ "$dry_run" != true ]]; then
         args=(
@@ -305,13 +415,25 @@ backup_path() {
           "--s3-chunk-size" "${chunk_size_mb}M"
         )
 
+        # MUDANÇA: Agora o tar sempre incluirá o conteúdo completo do diretório
+        # mas o hash será baseado apenas nos arquivos do nível atual
+        if [[ "$files_only" == true ]]; then
+          # Para files_only, usar apenas os arquivos listados
+          tar_files="$files"
+        else
+          # Para diretório completo, incluir tudo recursivamente no tar
+          tar_files=$(find . -type f | sed 's/^\.\///g' | LC_ALL=C sort)
+        fi
+
         # Create local archive first if validation is enabled or keep_local is true
         if [[ "$validate" == true ]] || [[ "$keep_local" == true ]]; then
-          echo "$files" | tr '\n' '\0' | xargs -0 tar -zcf "$local_archive" --
+          echo "$tar_files" | tr '\n' '\0' | xargs -0 tar -zcf "$local_archive" --
           
           # Validate local archive
           if [[ "$validate" == true ]]; then
-            if validate_archive "$local_archive" "$path" "$files_count"; then
+            local expected_count
+            expected_count=$(echo "$tar_files" | wc -l | awk '{ print $1 }')
+            if validate_archive "$local_archive" "$path" "$expected_count"; then
               msg "✅ Local archive validation passed"
             else
               msg "❌ Local archive validation failed - aborting upload"
@@ -320,7 +442,6 @@ backup_path() {
             fi
           fi
           
-          # CORREÇÃO: Upload do arquivo local usando rclone rcat
           msg "⬆️ Uploading validated archive $archive_name"
           cat "$local_archive" | rclone rcat "${args[@]}" "AmazonS3:$bucket/$archive_name"
           
@@ -333,12 +454,17 @@ backup_path() {
         else
           # Stream directly to S3 (original behavior)
           msg "⬆️ Streaming archive $archive_name to S3"
-          echo "$files" | tr '\n' '\0' | xargs -0 tar -zcf - -- |
+          echo "$tar_files" | tr '\n' '\0' | xargs -0 tar -zcf - -- |
             rclone rcat "${args[@]}" "AmazonS3:$bucket/$archive_name"
         fi
 
-        # Upload hash and file list
-        echo "$hash" | rclone rcat "AmazonS3:$bucket/$archive_name.md5"
+        # Upload hash with STANDARD storage class for quick access
+        rclone_standard_args=(
+          "-P"
+          "--s3-storage-class" "STANDARD"
+          "--s3-upload-concurrency" 8
+        )
+        echo "$hash" | rclone rcat "${rclone_standard_args[@]}" "AmazonS3:$bucket/$archive_name.md5"
         
         msg "🟩 Archive $archive_name uploaded successfully"
         
@@ -371,25 +497,39 @@ traverse_path() {
 
   # Only backup files at this level if we're at the target split depth
   if [[ $depth -eq $split_depth ]]; then
-    backup_path "$root_path/$path" "$path/_files" true
+    # Primeiro, fazer backup dos arquivos soltos no nível atual
+    local files_count
+    files_count=$(find . -maxdepth 1 -type f 2>/dev/null | wc -l)
+    
+    if [[ $files_count -gt 0 ]]; then
+      backup_path "$root_path/$path" "$path/_files" true
+    fi
   fi
 
   # read directories to array, taking into account possible spaces in names
   local dirs=()
   while IFS= read -r -d $'\0'; do
     dirs+=("$REPLY")
-  done < <(find . -mindepth 1 -maxdepth 1 -type d -print0)
+  done < <(find . -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null || true)
 
   if [[ -n "${dirs:-}" ]]; then
     for dir in "${dirs[@]}"; do
       # Skip system directories
       if [[ "$dir" != *\$RECYCLE.BIN && "$dir" != *.Trash-1000 && "$dir" != *System\ Volume\ Information ]]; then
+        local dir_clean=$(echo "$dir" | sed 's|^\./||')
+        
         if [[ $depth -eq $split_depth ]]; then
           # At target depth: backup this directory as a single archive
-          backup_path "$root_path/$path/$dir" "$path/$dir" false
+          backup_path "$root_path/$path/$dir" "$path/$dir_clean" false
         elif [[ $depth -lt $split_depth ]]; then
           # Above target depth: continue traversing
-          traverse_path "$path/$dir" $((depth + 1))
+          local next_path
+          if [[ "$path" == "." ]]; then
+            next_path="$dir_clean"
+          else
+            next_path="$path/$dir_clean"
+          fi
+          traverse_path "$next_path" $((depth + 1))
         fi
       fi
     done
