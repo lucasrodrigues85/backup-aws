@@ -120,6 +120,21 @@ class BackupManager:
             ]
         )
         
+        # Se executando manualmente (não cron), usar nível DEBUG
+        if sys.stdin.isatty():  # Terminal interativo
+            log_level = logging.DEBUG
+            print("🔍 Modo manual detectado - ativando logs detalhados")
+
+        # Configuração de logging
+        logging.basicConfig(
+            level=log_level,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_file, encoding='utf-8'),
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+
         # Limpeza de logs antigos
         self.cleanup_old_logs(log_dir)
     
@@ -196,7 +211,7 @@ class BackupManager:
             
             # Se estamos na profundidade alvo, mostrar o que será feito
             if current_depth == target_depth:
-                # Arquivos no nível atual
+                # Arquivos no nível atual (somente se houver arquivos)
                 if files:
                     s3_path = f"{backup_name}/{current_path}/_files.tar.gz" if current_path else f"{backup_name}/_files.tar.gz"
                     print(f"{indent}📄 Arquivos ({len(files)} arquivos) → {s3_path}")
@@ -216,34 +231,67 @@ class BackupManager:
             
             # Se ainda não chegamos na profundidade alvo, continuar descendo
             elif current_depth < target_depth:
+                # Mostrar arquivos no nível atual apenas se estivermos no último nível antes do target
+                if current_depth == target_depth - 1:
+                    if files:
+                        s3_path = f"{backup_name}/{current_path}/_files.tar.gz" if current_path else f"{backup_name}/_files.tar.gz"
+                        print(f"{indent}📄 Arquivos ({len(files)} arquivos) → {s3_path}")
+                
+                # Continuar descendo pelos diretórios
                 for dir_name in sorted(dirs):
                     next_path = os.path.join(current_path, dir_name) if current_path else dir_name
-                    print(f"{indent}📁 {dir_name}/")
-                    self._show_directory_structure(base_path, target_depth, backup_name, next_path, current_depth + 1)
                     
+                    # Mostrar o nome do diretório
+                    if current_depth < target_depth:
+                        # Contar arquivos totais no diretório para mostrar no preview
+                        dir_full_path = os.path.join(full_path, dir_name)
+                        try:
+                            file_count = sum(len(files) for _, _, files in os.walk(dir_full_path))
+                            if current_depth == target_depth - 1:
+                                # No último nível antes do target, mostrar que será arquivado
+                                s3_path = f"{backup_name}/{next_path}.tar.gz"
+                                print(f"{indent}📁 {dir_name}/ ({file_count} arquivos) → {s3_path}")
+                            else:
+                                # Níveis intermediários, apenas mostrar estrutura
+                                print(f"{indent}📁 {dir_name}/")
+                                self._show_directory_structure(base_path, target_depth, backup_name, next_path, current_depth + 1)
+                        except (OSError, PermissionError) as e:
+                            print(f"{indent}📁 {dir_name}/ (erro ao acessar)")
+                            
         except (OSError, PermissionError) as e:
             print(f"{indent}❌ Erro ao acessar diretório: {e}")
 
     def calculate_directory_hash(self, path):
-        """Calcula hash MD5 de todos os arquivos em uma pasta."""
+        """Calcula hash MD5 apenas dos arquivos do nível atual da pasta."""
         hash_md5 = hashlib.md5()
         
-        for root, dirs, files in os.walk(path):
-            dirs.sort()
+        try:
+            # Listar apenas arquivos do nível atual (não recursivo)
+            files = []
+            for item in os.listdir(path):
+                item_path = os.path.join(path, item)
+                if os.path.isfile(item_path):
+                    files.append(item)
+            
+            # Ordenar para manter sempre a mesma ordem
             files.sort()
             
             for filename in files:
-                filepath = os.path.join(root, filename)
+                filepath = os.path.join(path, filename)
                 try:
+                    # Incluir o nome do arquivo no hash
+                    hash_md5.update(filename.encode('utf-8'))
+                    
+                    # Incluir o conteúdo do arquivo no hash
                     with open(filepath, 'rb') as f:
-                        rel_path = os.path.relpath(filepath, path)
-                        hash_md5.update(rel_path.encode('utf-8'))
-                        
                         for chunk in iter(lambda: f.read(4096), b""):
                             hash_md5.update(chunk)
                 except (IOError, OSError) as e:
                     self.logger.warning(f"Erro ao ler arquivo {filepath}: {e}")
                     continue
+                    
+        except (OSError, PermissionError) as e:
+            self.logger.warning(f"Erro ao acessar diretório {path}: {e}")
         
         return hash_md5.hexdigest()
 
@@ -420,14 +468,48 @@ class BackupManager:
 
             self.logger.info(f"Executando comando: {' '.join(comando)}")
             
-            # Executa backup
-            resultado = subprocess.run(
-                comando, 
-                check=True, 
-                capture_output=True, 
+            # Executar com saída em tempo real
+            print(f"🚀 Executando: {' '.join(comando)}")
+            print("=" * 60)
+
+            processo = subprocess.Popen(
+                comando,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
-                timeout=3600  # Timeout de 1 hora
+                bufsize=1,
+                universal_newlines=True
             )
+
+            # Captura e exibe saída em tempo real
+            output_lines = []
+            while True:
+                output = processo.stdout.readline()
+                if output == '' and processo.poll() is not None:
+                    break
+                if output:
+                    # Remove quebras de linha extras e exibe
+                    line = output.strip()
+                    print(f"📤 {line}")
+                    output_lines.append(line)
+                    # Flush para garantir saída imediata
+                    sys.stdout.flush()
+
+            resultado_codigo = processo.poll()
+            resultado_stdout = '\n'.join(output_lines)
+
+            print("=" * 60)
+
+            if resultado_codigo != 0:
+                raise subprocess.CalledProcessError(resultado_codigo, comando, resultado_stdout)
+
+            # Simular objeto resultado para manter compatibilidade
+            class ResultadoMock:
+                def __init__(self, stdout, returncode):
+                    self.stdout = stdout
+                    self.returncode = returncode
+
+            resultado = ResultadoMock(resultado_stdout, resultado_codigo)
             
             self.logger.info(f"Backup executado com sucesso para {name}")
             self.logger.debug(f"Saída do comando: {resultado.stdout}")
